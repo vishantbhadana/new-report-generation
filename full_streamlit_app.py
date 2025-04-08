@@ -183,6 +183,7 @@ if button:
         address = f"https://www.screener.in/company/{ticker}"
         ratios_dict,soup = fetch_ratios(driver, address)
 
+    print("Available keys in ratios_dict:", ratios_dict.keys())
     print(ratios_dict)
 
     #display the ratios in a table format of six columns with three ratios in each row
@@ -341,12 +342,14 @@ if button:
     df = df.sort_index()
     df = df.replace(',', '', regex=True)
 
+
+
     #calculated values
     sales_growth_qoq=(float(df.loc['Sales Qtr'][0])-float(df.loc['Sales Prev Qtr'][0]))*100/abs(float(df.loc['Sales Prev Qtr'][0]))
     sales_growth_qoq=round(sales_growth_qoq,2)
     eps_growth_qoq=(float(ratios_dict['EPS latest quarter'])-float(ratios_dict['EPS Prev Qtr']))*100/abs(float(ratios_dict['EPS Prev Qtr']))
     eps_growth_qoq=round(eps_growth_qoq,2)
-    eps_growth_yoy=(float(ratios_dict['EPS last year'])-float(ratios_dict['EPS preceding year']))*100/abs(float(ratios_dict['EPS preceding year']))
+    eps_growth_yoy=(float(ratios_dict['EPS'])-float(ratios_dict['EPS last year']))*100/abs(float(ratios_dict['EPS last year']))
     eps_growth_yoy=round(eps_growth_yoy,2)
     
     font_path = os.path.join(fonts_dir,'SeafordRg.ttf')
