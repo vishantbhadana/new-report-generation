@@ -1,49 +1,33 @@
 """
-login.py – get Zerodha Kite *request_token* on Streamlit Cloud
-• Uses container’s chromium/chromedriver (install them in packages.txt)
-• Works with both TOTP and 6‑digit PIN screens
+login.py – fetch Zerodha Kite request_token on Streamlit Cloud
+• Uses container’s chromium/chromedriver (add both in packages.txt)
+• Robust: polls up to 90 s for each required element
+• On ultimate failure, saves page HTML to help debug
 """
 
 from __future__ import annotations
-
-import os, time, logging
+import os, time, logging, sys
 from pathlib import Path
-
 import pyotp
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import (
-    SessionNotCreatedException,
-    TimeoutException,
-    WebDriverException,
-)
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
-# ───────────────────────── logging ─────────────────────────
+# ─────────── logging ───────────
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
-for noisy in ("urllib3", "selenium"):
-    logging.getLogger(noisy).setLevel(logging.WARNING)
 
-# ─────────────────── chromium helpers ──────────────────────
+# ─────────── helpers ───────────
 def _first_existing(paths: list[str]) -> str | None:
-    for p in paths:
-        if Path(p).exists():
-            return p
-    return None
+    return next((p for p in paths if Path(p).exists()), None)
 
-
-def _make_driver() -> webdriver.Chrome:
-    chrome_bin = _first_existing(
-        ["/usr/bin/chromium-browser", "/usr/bin/chromium"]
-    )
-    chromedriver = _first_existing(
-        ["/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver"]
-    )
+def _new_driver() -> webdriver.Chrome:
+    chrome_bin  = _first_existing(["/usr/bin/chromium-browser", "/usr/bin/chromium"])
+    chromedriver = _first_existing(["/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver"])
     if not chrome_bin or not chromedriver:
-        raise FileNotFoundError("chromium/chromedriver not found in container")
+        raise FileNotFoundError("chromium or chromedriver missing in container")
 
     opts = Options()
     opts.binary_location = chrome_bin
@@ -51,82 +35,49 @@ def _make_driver() -> webdriver.Chrome:
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
+    return webdriver.Chrome(service=Service(chromedriver), options=opts)
 
-    try:
-        return webdriver.Chrome(service=Service(chromedriver), options=opts)
-    except WebDriverException:
-        return webdriver.Chrome(options=opts)        # fall back
+def _poll_for(driver, css_list: list[str], timeout: int = 90):
+    """Return first matching element (polls every 0.5 s) or raise TimeoutException."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for sel in css_list:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            if els:
+                return els[0]
+        time.sleep(0.5)
+    raise TimeoutException(f"None of {css_list} appeared in {timeout}s")
 
-# ──────────────────── main function ───────────────────────
+# ─────────── main ───────────
 def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
-    """Return Zerodha *request_token*; raises on failure."""
     driver: webdriver.Chrome | None = None
     try:
-        driver = _make_driver()
-        driver.set_page_load_timeout(45)
+        driver = _new_driver()
         driver.get(f"https://kite.trade/connect/login?api_key={api_key}&v=3")
 
-        # user‑id box (robust selector list, 60‑s wait)
-        def _userid_box(d):
-            selectors = (
-                "input#userid",
-                "input[name='user_id']",
-                "input[name='userid']",
-                "input[placeholder='User ID']",
-            )
-            for css in selectors:
-                els = d.find_elements(By.CSS_SELECTOR, css)
-                if els:
-                    return els[0]
-            return False
-
-        WebDriverWait(driver, 60).until(_userid_box).send_keys(user_id)
+        # 1️⃣ credentials
+        _poll_for(driver, ["input#userid", "input[name='user_id']", "input[name='userid']"]).send_keys(user_id)
         driver.find_element(By.CSS_SELECTOR, "input#password").send_keys(user_pwd)
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
-        # 2‑FA page (TOTP or PIN)
-        def _2fa_ready(d: webdriver.Chrome):
-            return (
-                "request_token=" in d.current_url
-                or d.find_elements(By.ID, "totp")
-                or d.find_elements(By.ID, "pin")
-            )
+        # 2️⃣ 2‑FA   (may redirect instantly)
+        if "request_token=" not in driver.current_url:
+            _poll_for(driver, ["input#totp", "input#pin"])
+            box = driver.find_element(By.CSS_SELECTOR, "input#totp, input#pin")
+            box.send_keys(pyotp.TOTP(totp_key).now())
+            driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
-        WebDriverWait(driver, 60).until(_2fa_ready)
+        # 3️⃣ wait for redirect
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            url = driver.current_url
+            if "request_token=" in url:
+                return url.split("request_token=")[1].split("&")[0]
+            time.sleep(0.5)
 
-        if "request_token=" in driver.current_url:
-            return driver.current_url.split("request_token=")[1].split("&")[0]
+        raise TimeoutException("redirect with request_token never happened")
 
-        box = (
-            driver.find_element(By.ID, "totp")
-            if driver.find_elements(By.ID, "totp")
-            else driver.find_element(By.ID, "pin")
-        )
-        box.send_keys(pyotp.TOTP(totp_key).now())
-        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-
-        WebDriverWait(driver, 60).until(
-            lambda d: "request_token=" in d.current_url
-        )
-        return driver.current_url.split("request_token=")[1].split("&")[0]
-
-    except (SessionNotCreatedException, WebDriverException, TimeoutException) as e:
-        logging.error("kiteLogin failed: %s", e)
-        raise
-    finally:
+    except TimeoutException as e:
+        # write page HTML to help diagnose unexpected layout changes
         if driver:
-            driver.quit()
-
-# self‑test (run locally if env vars are set)
-if __name__ == "__main__":
-    try:
-        tok = kiteLogin(
-            os.getenv("user_name"),
-            os.getenv("password"),
-            os.getenv("totp"),
-            os.getenv("api_key"),
-        )
-        print("request_token =", tok)
-    except Exception as err:
-        print("login.py self‑test failed:", err)
+            dump = "/tmp/kite_login_fail.html
