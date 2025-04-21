@@ -1,13 +1,10 @@
 """
-login.py – returns Zerodha Kite request_token
+login.py – return Zerodha Kite *request_token*
 
-• Detects platform:
-    ‑ macOS   → uses Google Chrome + /usr/local/bin/chromedriver
-    ‑ Linux   → uses the chromium/chromedriver you install via packages.txt
-
-• Handles both TOTP and 6‑digit PIN 2‑FA pages
-• Polls patiently (90 s) to avoid TimeoutException
-• On ultimate failure dumps the HTML to /tmp/kite_login_fail.html for inspection
+• Works on macOS and Streamlit Cloud
+• No webdriver‑manager; we point to fixed driver paths
+• Robust selectors list + 90‑s polling eliminates timeout
+• Dumps failure page to /tmp/kite_login_fail.html for debugging
 """
 
 from __future__ import annotations
@@ -21,31 +18,34 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
-# ───────────────────────── logging ─────────────────────────
+
+# ─────────────────────────── logging ────────────────────────────
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 for noisy in ("urllib3", "selenium"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-# ─────────────────── path detection ───────────────────────
+# ─────────── find browser + driver depending on platform ─────────
 def _detect_paths() -> tuple[str, str]:
-    """Return (chrome_binary, chromedriver_binary). Raises FileNotFoundError."""
-    if platform.system() == "Darwin":          # macOS laptop
+    """Return (chrome_binary, chromedriver_binary)."""
+    if platform.system() == "Darwin":  # macOS
         chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         driver = "/usr/local/bin/chromedriver"
         if Path(chrome).exists() and Path(driver).exists():
             return chrome, driver
 
-    # default Linux / Streamlit Cloud paths
-    chrome = next((p for p in ("/usr/bin/chromium-browser", "/usr/bin/chromium") if Path(p).exists()), None)
-    driver = next((p for p in ("/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver") if Path(p).exists()), None)
+    # Linux / Streamlit Cloud container
+    chrome = next((p for p in ("/usr/bin/chromium-browser", "/usr/bin/chromium")
+                   if Path(p).exists()), None)
+    driver = next((p for p in ("/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver")
+                   if Path(p).exists()), None)
     if chrome and driver:
         return chrome, driver
 
-    raise FileNotFoundError("Could not locate Chrome/Chromium and chromedriver.")
+    raise FileNotFoundError("Chrome/Chromium and chromedriver not found.")
 
 
-# ─────────────────── webdriver helper ──────────────────────
+# ────────────────── webdriver factory ────────────────────────────
 def _new_driver() -> webdriver.Chrome:
     chrome_bin, driver_bin = _detect_paths()
 
@@ -60,43 +60,43 @@ def _new_driver() -> webdriver.Chrome:
     try:
         return webdriver.Chrome(service=Service(driver_bin), options=opts)
     except WebDriverException:
-        # fallback to Selenium‑Manager (driverless) once
+        # fall back to Selenium‑Manager once (not used on Cloud)
         return webdriver.Chrome(options=opts)
 
 
-# ─────────────────── polling utility ──────────────────────
-def _poll_for_css(driver: webdriver.Chrome, selectors: list[str], timeout: int = 90):
-    """Return first WebElement that appears within *timeout* seconds, else raise."""
+# ─────────────── polling helper (0.5 s steps) ────────────────────
+def _poll_for_css(driver, selectors: list[str], timeout: int = 90):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for css in selectors:
-            els = driver.find_elements(By.CSS_SELECTOR, css)
+        for sel in selectors:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
             if els:
                 return els[0]
         time.sleep(0.5)
-    raise TimeoutException(f"None of selectors {selectors} appeared in {timeout}s")
+    raise TimeoutException(f"{selectors} not found in {timeout}s")
 
 
-# ─────────────────── main login function ──────────────────
+# ─────────────────────── main login fn ───────────────────────────
 def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
-    """Return Zerodha Connect *request_token*."""
     drv: webdriver.Chrome | None = None
     try:
         drv = _new_driver()
         drv.get(f"https://kite.trade/connect/login?api_key={api_key}&v=3")
 
-        # 1️⃣ credentials page
+        # 1️⃣ credential page
         _poll_for_css(
             drv,
-            ["input#userid", "input[name='user_id']", "input[name='userid']", "input[placeholder='User ID']"],
+            ["input#userid", "input[name='user_id']", "input[name='userid']",
+             "input[placeholder='User ID']"]
         ).send_keys(user_id)
         drv.find_element(By.CSS_SELECTOR, "input#password").send_keys(user_pwd)
         drv.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
-        # 2️⃣ 2‑FA (TOTP or PIN) – might redirect instantly
+        # 2️⃣ 2‑FA (may already redirect)
         if "request_token=" not in drv.current_url:
             _poll_for_css(drv, ["input#totp", "input#pin"])
-            drv.find_element(By.CSS_SELECTOR, "input#totp, input#pin").send_keys(pyotp.TOTP(totp_key).now())
+            drv.find_element(By.CSS_SELECTOR, "input#totp, input#pin")\
+               .send_keys(pyotp.TOTP(totp_key).now())
             drv.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
         # 3️⃣ wait for redirect
@@ -104,31 +104,29 @@ def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
         while time.time() < deadline:
             url = drv.current_url
             if "request_token=" in url:
-                token = url.split("request_token=")[1].split("&")[0]
-                logging.info("request_token acquired")
-                return token
+                return url.split("request_token=")[1].split("&")[0]
             time.sleep(0.5)
 
-        raise TimeoutException("Redirect with request_token never happened.")
+        raise TimeoutException("request_token redirect never happened.")
 
     except TimeoutException as e:
         if drv:
-            dump = "/tmp/kite_login_fail.html"
-            Path(dump).write_text(drv.page_source, encoding="utf-8")
-            logging.error("Timeout – page dumped to %s", dump)
+            Path("/tmp/kite_login_fail.html").write_text(drv.page_source,
+                                                         encoding="utf-8")
+            logging.error("Timeout – HTML dumped to /tmp/kite_login_fail.html")
         raise e
     finally:
         if drv:
             drv.quit()
 
 
-# ─────────────────── self‑test (optional) ──────────────────
+# ───────────────────────── self‑test ─────────────────────────────
 if __name__ == "__main__":
     try:
-        tok = kiteLogin(
-            os.getenv("user_name"), os.getenv("password"),
-            os.getenv("totp"),      os.getenv("api_key"),
-        )
-        print("request_token:", tok)
-    except Exception as exc:
-        print("login failed:", exc, file=sys.stderr)
+        print("request_token →",
+              kiteLogin(os.getenv("user_name"),
+                        os.getenv("password"),
+                        os.getenv("totp"),
+                        os.getenv("api_key")))
+    except Exception as err:
+        print("login failed:", err, file=sys.stderr)
