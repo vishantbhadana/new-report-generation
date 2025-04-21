@@ -12,6 +12,4 @@ plotly
 streamlit
 PyPDF2
 python-dotenv
-yfinance
-webdriver-manager
 pyotp==2.9.0
