@@ -8,7 +8,7 @@ login.py – return Zerodha Kite *request_token*
 """
 
 from __future__ import annotations
-import os, sys, time, logging
+import os, time, logging
 from pathlib import Path
 import pyotp
 
@@ -31,10 +31,10 @@ def _new_driver():
     options.add_argument('--disable-gpu')
     options.add_argument("--window-size=1920,1080")
 
-    # ✅ Correct Chromium binary location (real app, not CLI wrapper)
+    # ✅ Correct binary location of Chromium (actual browser app)
     options.binary_location = "/Applications/Chromium.app/Contents/MacOS/Chromium"
 
-    # ✅ Use chromedriver from /usr/bin (which you confirmed is present)
+    # ✅ Use chromedriver from /usr/bin
     service = Service(executable_path="/usr/bin/chromedriver")
 
     return webdriver.Chrome(service=service, options=options)
@@ -70,8 +70,9 @@ def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
 
     except Exception as e:
         logger.exception("❌ Error during login: %s", e)
-        with open("/tmp/kite_login_fail.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
+        if driver is not None:
+            with open("/tmp/kite_login_fail.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
         raise
 
     finally:
