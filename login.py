@@ -1,100 +1,110 @@
-"""Module to get request token """
+"""
+login.py  –  get Zerodha Kite *request_token* in headless mode
+Compatible with Streamlit Cloud (uses the system‑supplied Chromium + chromedriver)
+"""
+
 import time
 import logging
-from selenium import webdriver
-from selenium.webdriver.support.wait import WebDriverWait
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import SessionNotCreatedException, TimeoutException
-from webdriver_manager.chrome import ChromeDriverManager
 import pyotp
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logging.getLogger("requests").setLevel(logging.WARNING)
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import SessionNotCreatedException, TimeoutException, WebDriverException
 
-def kiteLogin(user_id, user_pwd, totp_key, api_key):
-    """Function to get request token """
-    max_tries = 20
-    count = 0
+# ──────────────────────────────────────────────────────────────────────────────
+# basic logging
+# ──────────────────────────────────────────────────────────────────────────────
+logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("selenium").setLevel(logging.WARNING)
+
+
+def _new_driver() -> webdriver.Chrome:
+    """
+    Return a headless Chrome driver that works on Streamlit Cloud.
+
+    Assumes:
+    * Chromium binary   → /usr/bin/chromium‑browser   (or /usr/bin/chromium)
+    * Chromedriver      → /usr/bin/chromedriver
+    Both come from **packages.txt** lines:
+        chromium
+        chromium-driver
+    """
+    options = Options()
+    options.binary_location = "/usr/bin/chromium-browser"  # fallback path below
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+
+    # if SL image has /usr/bin/chromium instead:
+    if not Service.is_connectable:
+        import os
+        if os.path.exists("/usr/bin/chromium"):
+            options.binary_location = "/usr/bin/chromium"
+
+    service = Service("/usr/bin/chromedriver")
+    return webdriver.Chrome(service=service, options=options)
+
+
+def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
+    """
+    Launch the Zerodha Connect login flow and return the *request_token*.
+    Raises on any failure.
+    """
     driver = None
     try:
-        # Set up Chrome options for Streamlit Cloud
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless")  # Run in headless mode
-        options.add_argument("--no-sandbox")  # Required for Linux environments
-        options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource issues
-        options.add_argument("--disable-gpu")  # Disable GPU acceleration
-        options.add_argument("--window-size=1920x1080")  # Set window size for consistency
+        driver = _new_driver()
+        driver.get(f"https://kite.trade/connect/login?api_key={api_key}&v=3")
 
-        # Use webdriver-manager to handle ChromeDriver
-        logging.info("Initializing Chrome WebDriver")
-        service = Service(ChromeDriverManager().install())
-        logging.info("ChromeDriver path: %s", service.path)
-        driver = webdriver.Chrome(service=service, options=options)
-        logging.info("WebDriver initialized successfully")
+        # 1 – credentials
+        WebDriverWait(driver, 10).until(
+            lambda d: d.find_element(By.ID, "userid")
+        ).send_keys(user_id)
 
-        # Navigate to Kite login page
-        driver.get(f'https://kite.trade/connect/login?api_key={api_key}&v=3')
-        
-        # Enter user ID
-        logging.info("Entering user ID")
-        login_id = WebDriverWait(driver, 10).until(
-            lambda x: x.find_element(By.XPATH, '//*[@id="userid"]'))
-        login_id.send_keys(user_id)
+        driver.find_element(By.ID, "password").send_keys(user_pwd)
+        driver.find_element(By.XPATH, "//button[@type='submit']").click()
 
-        # Enter password
-        logging.info("Entering password")
-        pwd = WebDriverWait(driver, 10).until(
-            lambda x: x.find_element(By.XPATH, '//*[@id="password"]'))
-        pwd.send_keys(user_pwd)
+        # 2 – TOTP
+        totp_box = WebDriverWait(driver, 10).until(
+            lambda d: d.find_element(By.XPATH, '//*[@icon="shield"]')
+        )
+        totp_box.send_keys(pyotp.TOTP(totp_key).now())
 
-        # Click submit button
-        logging.info("Submitting login form")
-        submit = WebDriverWait(driver, 10).until(
-            lambda x: x.find_element(By.XPATH, '//*[@id="container"]/div/div/div[2]/form/div[4]/button'))
-        submit.click()
-
-        # Enter TOTP
-        logging.info("Entering TOTP")
-        totp = WebDriverWait(driver, 10).until(
-            lambda x: x.find_element(By.XPATH, '//*[@icon="shield"]'))
-        authkey = pyotp.TOTP(totp_key)
-        toSendAuthKey = authkey.now()
-        totp.send_keys(toSendAuthKey)
-
-        # Wait for redirect with request token
-        logging.info("Waiting for request token in URL")
-        url = ""
-        while count < max_tries:
-            time.sleep(0.5)
+        # 3 – wait for redirect containing request_token
+        logging.info("waiting for redirect…")
+        for _ in range(40):        # ≈ 20 s
             url = driver.current_url
             if "request_token=" in url:
-                break
-            count += 1
-        else:
-            raise TimeoutException("Failed to retrieve request token within max tries")
+                token = url.split("request_token=")[1].split("&")[0]
+                logging.info("token obtained")
+                return token
+            time.sleep(0.5)
 
-        # Extract request token
-        initial_token = url.split('request_token=')[1]
-        request_token = initial_token.split('&')[0]
-        logging.info("Request token retrieved: %s", request_token)
+        raise TimeoutException("request_token not found in redirect URL")
 
-        return request_token
-
-    except SessionNotCreatedException as e:
-        logging.error("SessionNotCreatedException: %s", e)
-        raise
-    except TimeoutException as e:
-        logging.error("TimeoutException: %s", e)
-        raise
-    except Exception as e:
-        logging.error("Unexpected error: %s", e)
+    except (SessionNotCreatedException, WebDriverException) as e:
+        logging.error("chromedriver error: %s", e)
         raise
     finally:
         if driver:
-            logging.info("Closing WebDriver")
             driver.quit()
 
+
+# quick manual test
 if __name__ == "__main__":
-    pass
+    import os
+    try:
+        token = kiteLogin(
+            os.getenv("user_name"),
+            os.getenv("password"),
+            os.getenv("totp"),
+            os.getenv("api_key"),
+        )
+        print("request_token →", token)
+    except Exception as exc:
+        print("login failed:", exc)
