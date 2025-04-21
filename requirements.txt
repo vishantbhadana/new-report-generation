@@ -1,4 +1,5 @@
 selenium==4.30.0
+webdriver-manager==4.0.2
 pdfplumber
 tiktoken
 openai
@@ -13,5 +14,4 @@ streamlit
 PyPDF2
 python-dotenv
 yfinance
-webdriver-manager
 pyotp==2.9.0
