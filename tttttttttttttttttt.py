@@ -1,14 +1,11 @@
 """
 login.py – return Zerodha Kite *request_token*
-
 • Works on macOS and Streamlit Cloud
-• No webdriver‑manager; we point to fixed driver paths
-• Robust selectors list + 90‑s polling eliminates timeout
-• Dumps failure page to /tmp/kite_login_fail.html for debugging
+• Uses direct paths for both Chromium and chromedriver
 """
 
 from __future__ import annotations
-import os, sys, time, logging
+import os, time, logging
 from pathlib import Path
 import pyotp
 
@@ -26,29 +23,30 @@ logger = logging.getLogger(__name__)
 def _new_driver():
     options = Options()
     options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
 
-    if Path("/usr/bin/chromedriver").exists():
-        chrome_path = "/usr/bin/chromedriver"  # ✅ Streamlit Cloud
-    else:
-        chrome_path = "/usr/local/bin/chromedriver"  # ✅ macOS local
+    # ✅ Correct Chromium binary and chromedriver path
+    options.binary_location = "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    service = Service(executable_path="/usr/local/bin/chromedriver")
 
-    service = Service(executable_path=chrome_path)
     return webdriver.Chrome(service=service, options=options)
 
 def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
     """Return the Kite request token after logging in."""
+    driver = None
     try:
         driver = _new_driver()
         driver.get(f"https://kite.trade/connect/login?api_key={api_key}&v=3")
 
-        WebDriverWait(driver, 25).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input#userid"))).send_keys(user_id)
+        WebDriverWait(driver, 60).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input#userid"))).send_keys(user_id)
         driver.find_element(By.CSS_SELECTOR, "input#password").send_keys(user_pwd)
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
         totp = pyotp.TOTP(totp_key).now()
-        WebDriverWait(driver, 15).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input[icon='shield']"))).send_keys(totp)
+        WebDriverWait(driver, 60).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input[icon='shield']"))).send_keys(totp)
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
         logger.info("⌛ Waiting for request_token in redirected URL...")
@@ -67,8 +65,9 @@ def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
 
     except Exception as e:
         logger.exception("❌ Error during login: %s", e)
-        with open("/tmp/kite_login_fail.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
+        if driver:
+            with open("/tmp/kite_login_fail.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
         raise
 
     finally:
@@ -76,8 +75,8 @@ def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
             driver.quit()
 
 if __name__ == "__main__":
-    import dotenv
-    dotenv.load_dotenv()
+    from dotenv import load_dotenv
+    load_dotenv()
     token = kiteLogin(
         user_id=os.getenv("user_name"),
         user_pwd=os.getenv("password"),
