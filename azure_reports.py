@@ -1,6 +1,9 @@
 from my_kite_ticker import MyKiteTicker
 from selenium import webdriver
 import os,time
+import pdfplumber
+import tiktoken
+from openai import AzureOpenAI
 import login
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -38,42 +41,6 @@ load_dotenv()
 
 #read bse stock list
 bse_stock_list = pd.read_csv('bse.csv')
-
-# Streamlit interf
-
-# # Connect to Zerodha Kite only once
-# if 'kite' not in st.session_state:
-#     st.write('Connecting to Zerodha Kite')
-#     user_name = os.getenv("user_name")
-#     password = os.getenv("password")
-#     totp = os.getenv("totp")
-#     api_key = os.getenv("api_key")
-#     api_secret = os.getenv("api_secret")
-
-#     kite = KiteConnect(api_key=api_key)
-#     request_token = login.kiteLogin(user_name, password, totp, api_key)
-#     data = kite.generate_session(request_token, api_secret)
-#     kite.set_access_token(data["access_token"])
-
-#     instrument_dump = kite.instruments()  # Get instruments dump from NSE
-#     instrument_df = pd.DataFrame(instrument_dump)  # Dump it to a dataframe
-
-#     st.session_state.kite = kite
-#     st.session_state.instrument_df = instrument_df
-
-#     st.write('Connected to Zerodha Kite')
-
-# # Add a button to get the analysis
-# button = st.button('Get Analysis')
-
-# if button:
-#     kite = st.session_state.kite
-#     instrument_df = st.session_state.instrument_df
-
-#     #check if ticker is present in the instrument list
-#     if ticker not in instrument_df['tradingsymbol'].values:
-#         st.write('Invalid ticker. Please enter a valid ticker.')
-#         st.stop()
 
 def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     st.write(f"Starting analysis for {ticker} on {user_date_str}")
@@ -763,10 +730,98 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     goalfi=""" Avanti Feeds Limited showcases strong financial health with consistent revenue growth of 5.54% YoY and robust quarterly sales growth. The company's profitability metrics are commendable, highlighted by a high operating profit margin of 8.53% and a net profit margin of 7.34%. With a low debt-to-equity ratio of 0.01, Avanti demonstrates excellent financial prudence and stability, making it a secure investment. The high returns on equity, assets, and capital employed further confirm its efficient capital utilization and operational excellence. Although the Trailing P/E of 28.1 might hint at slight overvaluation, the company's consistent performance and growth prospects make it a strong buy recommendation."""
     viewpoint=f"""<b>GoaFi's viewpoint:</b> {goalfi}"""
     goalfiviewpoint=Paragraph(viewpoint,custom_style)
-     # Initialize the OpenAI client
-    client = OpenAI(api_key=api_key)
+    
 
-    assistant1 = client.beta.assistants.create(
+    endpoint = os.getenv("ENDPOINT_URL", "https://ai-tech7953ai345456404029.openai.azure.com/")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY", "EtvF77CaTZ7xeFf36oJvWKWOkWoaxdZOW0gFQSOf0NObKkI1vw1TJQQJ99BDACHYHv6XJ3w3AAAAACOGoqkw")
+    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")  # Your deployed gpt-4o model
+    api_version = "2025-01-01-preview"
+
+
+    # Initialize Azure OpenAI client
+    client = AzureOpenAI(
+        azure_endpoint=endpoint,
+        api_key=api_key,
+        api_version=api_version,
+        azure_deployment=deployment
+    )
+
+    # Initialize the OpenAI client
+    client_1 = OpenAI(api_key=api_key)
+
+
+    
+
+    # Construct the PDF path and initialize message_file1
+    
+    pdf_path = f"downloads/{ticker}_concall.pdf"
+    response_concall = None
+
+    # Check if the concall PDF exists
+    if os.path.exists(pdf_path):
+
+        def extract_text_from_pdf(pdf_path):
+            """Extract text from PDF using pdfplumber."""
+            text = ""
+            with pdfplumber.open(pdf_path) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text() or ""
+                    if page_text.strip():
+                        text += page_text + "\n"
+            return text.strip()
+
+        def chunk_text(text, max_tokens=100000):
+            """Split text into chunks based on token limit."""
+            encoding = tiktoken.encoding_for_model("gpt-4o")
+            tokens = encoding.encode(text)
+            chunks = []
+            for i in range(0, len(tokens), max_tokens):
+                chunk_tokens = tokens[i:i + max_tokens]
+                chunks.append(encoding.decode(chunk_tokens))
+            return chunks
+
+        def get_concall_summary(ticker, pdf_path):
+            """Generate summary using Azure OpenAI with chunked PDF text."""
+            # Extract text from PDF
+            text = extract_text_from_pdf(pdf_path)
+            if not text:
+                print(f"No text extracted from {pdf_path}. Falling back to generic summary.")
+                return "No concall data available for analysis."
+
+            # Chunk the text
+            chunks = chunk_text(text)
+            print(f"PDF text split into {len(chunks)} chunks.")
+
+            # Prepare messages with all chunks
+            messages = [
+                {"role": "system", "content": "You are an elite AI assistant analyzing Sardaen concall transcripts. Provide a summary in 4 paragraphs, 2800 characters total, with natural language, focusing on initiatives, strategies, growth, and insights. Maintain temperature=0 for precision."}
+            ]
+            for i, chunk in enumerate(chunks):
+                messages.append({"role": "user", "content": f"Chunk {i+1} of concall transcript: {chunk}"})
+            messages.append({
+                "role": "user",
+                "content": """
+                Summarize the transcript across all chunks. Identify and explain new initiatives, business strategies, and diversification schemes. Describe future growth and scaling perspectives. Provide positive and constructive views based on the analysis. Highlight key data points. Write exactly 4 paragraphs in 2800 characters (including spaces), keeping language similar to the document. Do not include references or extra text.
+                """
+            })
+
+            # Call Azure OpenAI
+            response = client.chat.completions.create(
+                model=deployment,
+                messages=messages,
+                max_tokens=2800,
+                temperature=0,
+                top_p=0.95,
+                frequency_penalty=0,
+                presence_penalty=0,
+                stop=None,
+                stream=False
+            )
+
+            return response.choices[0].message.content
+        response_concall = get_concall_summary(ticker, pdf_path)
+    else:
+        assistant1 = client_1.beta.assistants.create(
         name="Financial Analyst Assistant",
         instructions="""
             You are an elite AI assistant at a top-tier financial advisory firm.
@@ -782,45 +837,11 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
         temperature=0
     )
 
-    # Construct the PDF path and initialize message_file1
-    pdf_path = f"downloads/{ticker}_concall.pdf"
-    message_file1 = None
-
-    # Check if the concall PDF exists
-    if os.path.exists(pdf_path):
-        # If the PDF exists, upload it (assuming client.files.upload exists) and create a thread with the file
-        message_file1 = client.files.create(
-        file=open(f"downloads/{ticker}_concall.pdf", "rb"), purpose="assistants"
-        )
-        thread1 = client.beta.threads.create(
-             messages=[
-        {
-        "role": "user",
-        "content": """
-    Summarize the transcript of the last meeting provided.
-    Identify and explain the new initiatives, business strategies, and diversification schemes adopted by the company.
-    Try to keep the language simnilar to the original document. Add few lines exactly from the document.
-    Describe the future growth and scaling perspectives of the company.
-    Provide both positive and even better if views based on the transcript analysis with zero temperature.
-    Highlight any specific data points or details that are of particular interest or importance.
-
-    write this summary in 4 paragraphs with mentioning important points in exactly 2800 characters including whitespace.  follow this insructions strictly.
-    do not write anything else in the message, do not mention any refrences or citations.
-    Ensure your explanations are clear and accessible for our clients who rely on our financial advisory services. Maintain a response temperature=0 for precise and accurate information.
-    """,
-        # Attach the new file to the message.
-        "attachments": [
-            { "file_id": message_file1.id, "tools": [{"type": "file_search"}] }
-        ],
-        }
-    ]
-        )
-        print("Concall PDF found. Thread created for PDF analysis. Thread ID:", thread1.id)
-    else:
         # Fallback branch when PDF is not found
-        thread1 = client.beta.threads.create(
+        thread1 = client_1.beta.threads.create(
             messages=[
                 {
+                    
                     "role": "user",
                     "content": f"""
     No PDF found for {ticker}. 
@@ -837,41 +858,22 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
             ]
         )
         print("No PDF found. Fallback thread created with ID:", thread1.id)
+        run = client.beta.threads.runs.create_and_poll(thread_id=thread1.id, assistant_id=assistant1.id)  # Replace with actual assistant ID
+        messages = list(client.beta.threads.messages.list(thread_id=thread1.id, run_id=run.id))
+        message_content = messages[0].content[0].text
+        response_concall = message_content.value
 
     # Optional: Check if a file was uploaded
-    if message_file1 is not None:
-        print("message_file1 is defined (file uploaded).")
+    if response_concall is not None:
+        st.write("response_concall is defined (file uploaded).")
 
-    # Print the file search tool resource for debugging purposes
-    print(thread1.tool_resources.file_search)
-    print(message_file1)
-
-    # Create a run and poll for the result
-    run = client.beta.threads.runs.create_and_poll(
-        thread_id=thread1.id, assistant_id=assistant1.id
-    )
-
-    # Retrieve messages from the thread run
-    messages = list(client.beta.threads.messages.list(thread_id=thread1.id, run_id=run.id))
-
-    # Process the message content, handle annotations, and prepare citations
-    message_content = messages[0].content[0].text
-    annotations = message_content.annotations
-    citations = []
-    for index, annotation in enumerate(annotations):
-        message_content.value = message_content.value.replace(annotation.text, f"[{index}]")
-        if file_citation := getattr(annotation, "file_citation", None):
-            cited_file = client.files.retrieve(file_citation.file_id)
-            citations.append(f"[{index}] {cited_file.filename}")
-
-    # Output the final message content
-    print(message_content.value)
     st.header("COMPANY'S OVERVIEW BASED ON RECENT CONCALL AND PERFORMANCE")
-    st.write(message_content.value)
+    st.write(response_concall)
+    
 
     # Example formatting adjustments for the response message
-    response_message = message_content.value.replace('₹', 'Rs.')
-    formatted_text = message_content.value.replace('\n\n', '<br/><br/>').replace('\n', ' ')
+    response_message = response_concall.replace('₹', 'Rs.')
+    formatted_text = response_concall.replace('\n\n', '<br/><br/>').replace('\n', ' ')
 
     styles = getSampleStyleSheet()
     # Page dimensions
@@ -913,69 +915,46 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
 
-    assistant2 = client.beta.assistants.create(
-    name="Change length of the paragraph assistant",
-    instructions="""
-    You are an exceptional rephrasing assistant. Your tasks include:
 
-    Analyze the text and adjust the length of the paragraph with a total character limit of 400 characters including whitespaces.
 
-    Ensure your explanations are clear and accessible for our clients who rely on our financial advisory services. Maintain a response temperature setting of 0.1 for precise and accurate information.
-
-    """,
-    model="gpt-4o",
-    tools=[{"type": "file_search"}],
-    temperature=0
-    )
-
-    thread2 = client.beta.threads.create(
-    messages=[
+    messages_2 = [
         {
-        "role": "user",
-        "content": f"""
-    read this text:
-    {stock.info['longBusinessSummary']}
-    Write a introduction for the company by Analyzing the given text. 
-
-    you can also use this if you are short of words:{para}
-
-    adjust the length of the paragraph with a total of exactly 400 characters.
-    do not write anything else in the message, strictly follow this instructions.
-
-    """,
-        # Attach the new file to the message.
-        
+            "role": "system",
+            "content": """
+    You are an exceptional rephrasing assistant for financial advisory services. Your task is to:
+    - Analyze the provided text and use your knowledge of the company.
+    - Write a clear, accessible introduction for the company.
+    - Ensure the introduction is exactly 400 characters (including whitespace).
+    - Use precise and accurate information (temperature=0.1).
+    """
+        },
+        {
+            "role": "user",
+            "content": f"""
+    Analyze this text:
+    {para}
+    Using this text and your knowledge, write a company introduction exactly 400 characters long (including whitespace).
+    Do not include any other content in the response.
+    """
         }
     ]
+
+    # Call Azure OpenAI API
+    response_2 = client.chat.completions.create(
+        model=deployment,
+        messages=messages_2,
+        temperature=0.1,
+        max_tokens=150  # Conservative limit for ~400 chars
     )
-    
-    # The thread now has a vector store with that file in its tool resources.
-    print(thread2.tool_resources.file_search)
 
-    run = client.beta.threads.runs.create_and_poll(
-        thread_id=thread2.id, assistant_id=assistant2.id
-    )
-
-    messages = list(client.beta.threads.messages.list(thread_id=thread2.id, run_id=run.id))
-
-    message_content = messages[0].content[0].text
-    annotations = message_content.annotations
-    citations = []
-    for index, annotation in enumerate(annotations):
-        message_content.value = message_content.value.replace(annotation.text, f"[{index}]")
-        if file_citation := getattr(annotation, "file_citation", None):
-            cited_file = client.files.retrieve(file_citation.file_id)
-            citations.append(f"[{index}] {cited_file.filename}")
-
-    print(message_content.value)
-    # print("\n".join(citations))
-
-    #show the message content.value in the streamlit app
-    #start with a header "COMPANY INTRODUCTION"
+# Extract the response content
+    response_b = response_2.choices[0].message.content
     st.header("COMPANY INTRODUCTION")
-    st.write(message_content.value)
+    st.write(response_b)
 
-    text = message_content.value
+    text = response_b
+
+    
 
     styles = getSampleStyleSheet()
     # Page dimensions
@@ -1097,10 +1076,19 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     canv.showPage()
     canv.save()
 
+    def extract_pdf_text(pdf_path):
+        with pdfplumber.open(pdf_path) as pdf:
+            text = "".join(page.extract_text() or "" for page in pdf.pages)
+        return text
 
-    assistant = client.beta.assistants.create(
-    name="Financial Analyst Assistant",
-    instructions="""
+    pdf_path = "DCB_pdf.pdf"
+    pdf_text = extract_pdf_text(pdf_path)
+
+    # Construct the prompt (exact copy from original)
+    messages_3 = [
+        {
+            "role": "system",
+            "content": """
     You are an exceptional financial analyst assistant. Your tasks include:
 
     Analyze Financial Sheets: Thoroughly review the provided financial sheets of a company, focusing on specified metrics.
@@ -1109,25 +1097,11 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     Deliver Detailed Insights: Supply various tables, sector analyses, and other relevant data to support your findings.
 
     Ensure your explanations are clear and accessible for our clients who rely on our financial advisory services. Maintain a response temperature setting of 0.1 for precise and accurate information.
-
-    """,
-    model="gpt-4o",
-    tools=[{"type": "file_search"}],
-    temperature=0
-    )
-
-
-    message_file = client.files.create(
-    file=open("DCB_pdf.pdf", "rb"), purpose="assistants"
-    )
-    
-    # Create a thread and attach the file to the message
-    thread = client.beta.threads.create(
-    messages=[
+    """
+        },
         {
-        "role": "user",
-        "content": """
-
+            "role": "user",
+            "content": f"""
     **Analyze the Company Data and Provide Commentary**
 
     You are given data for a company, which is organized into nine tables:
@@ -1157,8 +1131,6 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     - Write as a human research analyst, avoiding any machine-generated tonality.
     - Provide only the requested table in your response, strictly following these instructions.
 
-
-
     give this table in format like this:
     Aspect,Commentary
     Revenue,"",""
@@ -1173,38 +1145,38 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
 
     Do not write anything extra in the response
 
-    """,
-        # Attach the new file to the message.
-        "attachments": [
-            { "file_id": message_file.id, "tools": [{"type": "file_search"}] }
-        ],
+    {pdf_text}
+    """
         }
     ]
+
+    # Call Azure OpenAI API
+    response_3 = client.chat.completions.create(
+        model=deployment,
+        messages=messages_3,
+        temperature=0.1,
+        max_tokens=2000
     )
-    
-    # The thread now has a vector store with that file in its tool resources.
-    print(thread.tool_resources.file_search)
+    csv_content = response_3.choices[0].message.content.strip()
+    file_path = os.path.join(os.getcwd(), 'financial_metrics.csv')
+    with open(file_path, 'w', encoding='utf-8') as file:
+        file.write(csv_content)
+    df_table = pd.read_csv('financial_metrics.csv')
+    df_table = df_table.set_index('Aspect')
 
-
-    run = client.beta.threads.runs.create_and_poll(
-        thread_id=thread.id, assistant_id=assistant.id
-    )
-
-    messages = list(client.beta.threads.messages.list(thread_id=thread.id, run_id=run.id))
-
-    message_content = messages[0].content[0].text
-    annotations = message_content.annotations
+    # Handle annotations (empty for Azure)
+    annotations = []
     citations = []
     for index, annotation in enumerate(annotations):
-        message_content.value = message_content.value.replace(annotation.text, f"[{index}]")
+        csv_content = csv_content.replace(annotation.text, f"[{index}]")
         if file_citation := getattr(annotation, "file_citation", None):
             cited_file = client.files.retrieve(file_citation.file_id)
             citations.append(f"[{index}] {cited_file.filename}")
 
-    print(message_content.value)
-    print("\n".join(citations))
-
-    csv_content = message_content.value
+    # Print the CSV content and citations
+    print(csv_content)
+    if citations:
+        print("\n".join(citations))
 
     # Define the path to save the CSV file
     file_path = os.path.join(os.getcwd(), 'financial_metrics.csv')
@@ -1213,10 +1185,11 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     with open(file_path, 'w', encoding='utf-8') as file:
         file.write(csv_content)
 
-    print(f"CSV file has been saved to {file_path}")
+    st.write(f"CSV file has been saved to {file_path}")
 
-    df_table = pd.read_csv('financial_metrics.csv')
-    df_table = df_table.set_index('Aspect')
+    df_table = pd.read_csv('financial_metrics.csv', index_col='Aspect')
+    df_table.columns = df_table.columns.str.strip()
+    df_table.index   = df_table.index.str.strip()
     for column in df_table.columns:
         df_table[column] = df_table[column].str.replace('₹', 'Rs.')
         df_table[column] = df_table[column].str.replace('\n\n', '<br/><br/>').replace('\n', ' ')
@@ -1456,9 +1429,16 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     with open(f'{output_dir}/{ticker}.pdf', 'wb') as out:
         pdf_writer.write(out)
 
-    assistant3 = client.beta.assistants.create(
-    name="Financial Analyst Assistant",
-    instructions="""
+    file_path = f"{output_dir}/{ticker}.pdf"
+
+    # Extract text from PDF
+    pdf_text = extract_pdf_text(file_path)
+
+    # Construct the prompt (exact copy from original)
+    messages_4 = [
+        {
+            "role": "system",
+            "content": """
     You are an exceptional financial analyst assistant. Your tasks include:
 
     Analyze Financial Sheets: Thoroughly review the provided financial sheets of a company, focusing on specified metrics.
@@ -1468,22 +1448,11 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     Deliver Detailed Insights: Supply various tables, sector analyses, and other relevant data to support your findings.
 
     Ensure your explanations are clear and accessible for our clients who rely on our financial advisory services. Maintain a response temperature setting of 0.1 for precise and accurate information.
-
-    """,
-    model="gpt-4o",
-    tools=[{"type": "file_search"}],
-    )
-    file_path=f'{output_dir}/{ticker}.pdf'
-    message_file = client.files.create(
-    file=open(file_path, "rb"), purpose="assistants"
-    )
-    
-    # Create a thread and attach the file to the message
-    thread3 = client.beta.threads.create(
-    messages=[
+    """
+        },
         {
-        "role": "user",
-        "content": """
+            "role": "user",
+            "content": f"""
     Please write the commentary maximum of 1500 characters in two paragraphs for the recommendation section of our report. We are bullish on this company from a short to mid-term perspective. 
 
     Use key data points such as growth QoQ metrics, valuation metrics, capital allocation , peer to peer competition , price chart and from the recent concall summary. 
@@ -1501,46 +1470,45 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     Only provide the paragraphs without any additional information or commentary of the previous response, do not add anything extra in your response prompt i have to copy it directly and use it somewhere. 
     alse not include citations or references in the response.
     follow these instructions strictly 
-        """,
-        # Attach the new file to the message.
-        "attachments": [
-            { "file_id": message_file.id, "tools": [{"type": "file_search"}] }
-        ],
+
+    {pdf_text}
+    """
         }
     ]
+
+    # Call Azure OpenAI API
+    response_4 = client.chat.completions.create(
+        model=deployment,
+        messages=messages_4,
+        temperature=0.1,
+        max_tokens=500  # Enough for 1500 chars (~300-400 tokens)
     )
-    
-    # The thread now has a vector store with that file in its tool resources.
-    print(thread3.tool_resources.file_search)
+    message_content = response_4.choices[0].message.content.strip()
 
-    run3 = client.beta.threads.runs.create_and_poll(
-        thread_id=thread3.id, assistant_id=assistant3.id
-    )
-
-    messages = list(client.beta.threads.messages.list(thread_id=thread3.id, run_id=run3.id))
-
-    message_content = messages[0].content[0].text
-    annotations = message_content.annotations
+    # Handle annotations (empty for Azure)
+    annotations = []
     citations = []
     for index, annotation in enumerate(annotations):
-        message_content.value = message_content.value.replace(annotation.text, f"[{index}]")
+        message_content = message_content.replace(annotation.text, f"[{index}]")
         if file_citation := getattr(annotation, "file_citation", None):
             cited_file = client.files.retrieve(file_citation.file_id)
             citations.append(f"[{index}] {cited_file.filename}")
 
-    print(message_content.value)
-    print("\n".join(citations))
+    # Print the response and citations
+    print(message_content)
+    if citations:
+        print("\n".join(citations))
 
-    response_table=message_content.value.replace('₹', 'Rs.')
-    formatted_text = message_content.value.replace('\n\n', '<br/><br/>').replace('\n', ' ')
+    # Format the text
+    response_table = message_content.replace('₹', 'Rs.')
+    formatted_text = message_content.replace('\n\n', '<br/><br/>').replace('\n', ' ')
     print(formatted_text)
 
-    #show the formatted text in the streamlit app   
+    # Show in Streamlit app
     st.header("Analyst Viewpoint")
-    analyst_viewpoint = message_content.value
-    st.write(message_content.value)
+    analyst_viewpoint = message_content
+    st.write(message_content)
 
-     #show the formatted text in the streamlit app   
     date_str   = datetime.datetime.now().strftime("%Y-%m-%d")
     base_dir   = os.path.join(os.getcwd(), "csvs", date_str)   # …/csvs/2025-04-16
     os.makedirs(base_dir, exist_ok=True)                       # create if it’s missing
