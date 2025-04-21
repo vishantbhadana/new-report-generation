@@ -41,6 +41,7 @@ def _new_driver():
 
 def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
     """Return the Kite request token after logging in."""
+    driver = None
     try:
         driver = _new_driver()
         driver.get(f"https://kite.trade/connect/login?api_key={api_key}&v=3")
