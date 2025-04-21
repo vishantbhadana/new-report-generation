@@ -1,14 +1,15 @@
 """
-login.py  –  fetch Zerodha Kite *request_token* in Streamlit Cloud
-Robust against different Chromium / chromedriver paths.
+login.py  –  obtain Zerodha Kite *request_token* in Streamlit Cloud
+• Works with Chromium / chromedriver that you install via packages.txt
+• Handles either TOTP box id="totp"  or  PIN box id="pin"
 """
 
-import os
-import time
-import logging
-import pyotp
+from __future__ import annotations
+
+import os, time, logging
 from pathlib import Path
 
+import pyotp
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -20,98 +21,101 @@ from selenium.common.exceptions import (
     WebDriverException,
 )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# logging
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────── logging ─────────────────────────────
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 for noisy in ("urllib3", "selenium"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# helpers
-# ──────────────────────────────────────────────────────────────────────────────
-def _locate_binary(candidates) -> str | None:
-    """Return first existing path from *candidates* list, else None."""
-    for p in candidates:
+# ─────────────────────── chromium / driver helpers ─────────────────
+def _first_existing(paths: list[str]) -> str | None:
+    for p in paths:
         if Path(p).exists():
             return p
     return None
 
 
-def _new_driver() -> webdriver.Chrome:
+def _make_driver() -> webdriver.Chrome:
     """
-    Return a headless Chrome‑driver that works on Streamlit Cloud.
+    Return headless Chrome suited for Streamlit Cloud.
 
-    * binary candidates  : /usr/bin/chromium  | /usr/bin/chromium-browser
-    * driver  candidates : /usr/bin/chromedriver | /usr/lib/chromium/chromedriver
+    binary candidates  = /usr/bin/chromium-browser  | /usr/bin/chromium
+    driver candidates  = /usr/bin/chromedriver      | /usr/lib/chromium/chromedriver
     """
-    chrome_binary = _locate_binary(
-        ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
+    chrome_bin = _first_existing(
+        ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]
     )
-    chromedriver = _locate_binary(
+    chromedriver = _first_existing(
         ["/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver"]
     )
+    if not chrome_bin or not chromedriver:
+        raise FileNotFoundError("chromium/chromedriver not found in container")
 
-    if not chrome_binary or not chromedriver:
-        raise FileNotFoundError(
-            f"Cannot find chromium ({chrome_binary}) or chromedriver ({chromedriver})"
-        )
+    opts = Options()
+    opts.binary_location = chrome_bin
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
 
-    options = Options()
-    options.binary_location = chrome_binary
-    # “new” headless is default for Chrome ≥ 109
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-
-    service = Service(chromedriver)
     try:
-        return webdriver.Chrome(service=service, options=options)
-    except WebDriverException as exc:
-        # if explicit path still fails, try Selenium‑Manager fallback once
-        logging.warning("explicit chromedriver failed → fallback to driverless: %s", exc)
-        return webdriver.Chrome(options=options)
+        serv = Service(chromedriver)
+        return webdriver.Chrome(service=serv, options=opts)
+    except WebDriverException as e:
+        # fall back on Selenium‑Manager (driverless) once
+        logging.warning("explicit chromedriver failed → selenium‑manager fallback (%s)", e)
+        return webdriver.Chrome(options=opts)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# main function
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── kiteLogin main ──────────────────────────
 def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
     """
-    Perform the Zerodha Connect flow and return *request_token*.
-    Raise an exception on any failure.
+    Complete Zerodha Connect login & return *request_token*.
+
+    Raises TimeoutException if any page element does not show up in time.
     """
-    driver = None
+    driver: webdriver.Chrome | None = None
     try:
-        driver = _new_driver()
+        driver = _make_driver()
         driver.get(f"https://kite.trade/connect/login?api_key={api_key}&v=3")
 
-        # credentials
-        WebDriverWait(driver, 10).until(
+        # ── 1  credentials page ─────────────────────────────────────
+        WebDriverWait(driver, 15).until(
             lambda d: d.find_element(By.ID, "userid")
         ).send_keys(user_id)
         driver.find_element(By.ID, "password").send_keys(user_pwd)
         driver.find_element(By.XPATH, "//button[@type='submit']").click()
 
-        # TOTP
-        totp_box = WebDriverWait(driver, 10).until(
-            lambda d: d.find_element(By.XPATH, '//*[@icon="shield"]')
+        # ── 2  2‑FA page (TOTP or PIN) ──────────────────────────────
+        def _2fa_ready(d: webdriver.Chrome):
+            return (
+                "request_token=" in d.current_url
+                or d.find_elements(By.ID, "totp")
+                or d.find_elements(By.ID, "pin")
+            )
+
+        WebDriverWait(driver, 20).until(_2fa_ready)
+
+        # If redirect already happened very fast
+        if "request_token=" in driver.current_url:
+            return driver.current_url.split("request_token=")[1].split("&")[0]
+
+        # otherwise fill 2‑FA
+        box = (
+            driver.find_element(By.ID, "totp")
+            if driver.find_elements(By.ID, "totp")
+            else driver.find_element(By.ID, "pin")
         )
-        totp_box.send_keys(pyotp.TOTP(totp_key).now())
+        box.send_keys(pyotp.TOTP(totp_key).now())
+        driver.find_element(By.XPATH, "//button[@type='submit']").click()
 
-        # wait for redirect containing request_token
-        logging.info("waiting for request_token redirect…")
-        for _ in range(40):  # ≈20 s
-            url = driver.current_url
-            if "request_token=" in url:
-                token = url.split("request_token=")[1].split("&")[0]
-                logging.info("request_token obtained")
-                return token
-            time.sleep(0.5)
-
-        raise TimeoutException("request_token not found in redirect URL")
+        # ── 3  wait for redirect with token ─────────────────────────
+        WebDriverWait(driver, 25).until(
+            lambda d: "request_token=" in d.current_url
+        )
+        token = driver.current_url.split("request_token=")[1].split("&")[0]
+        logging.info("request_token acquired")
+        return token
 
     except (SessionNotCreatedException, WebDriverException, TimeoutException) as e:
         logging.error("kiteLogin failed: %s", e)
@@ -121,9 +125,7 @@ def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
             driver.quit()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# quick manual test (runs only when this file is executed directly)
-# ──────────────────────────────────────────────────────────────────────────────
+# ───────────────────────── self‑test (optional) ────────────────────
 if __name__ == "__main__":
     try:
         tok = kiteLogin(
