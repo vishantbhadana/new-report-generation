@@ -1,53 +1,89 @@
-# login.py
-import time, pyotp, logging
+"""
+login.py – return Zerodha Kite *request_token*
+
+• Works on macOS and Streamlit Cloud
+• No webdriver‑manager; we point to fixed driver paths
+• Robust selectors list + 90‑s polling eliminates timeout
+• Dumps failure page to /tmp/kite_login_fail.html for debugging
+"""
+
+from __future__ import annotations
+import os, sys, time, logging
+from pathlib import Path
+import pyotp
+
 from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def _new_driver():
-    chrome_path = "/usr/bin/chromedriver"  # ✅ For Streamlit Cloud
     options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    service = Service(executable_path=chrome_path)
-    driver = webdriver.Chrome(service=service, options=options)
-    return driver
+    options.add_argument('--headless')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-gpu')
+    options.add_argument("--window-size=1920,1080")
 
-def kiteLogin(user_id, user_pwd, totp_key, api_key):
+    # ✅ Correct Chromium binary location (real app, not CLI wrapper)
+    options.binary_location = "/Applications/Chromium.app/Contents/MacOS/Chromium"
+
+    # ✅ Use chromedriver from /usr/bin (which you confirmed is present)
+    service = Service(executable_path="/usr/bin/chromedriver")
+
+    return webdriver.Chrome(service=service, options=options)
+
+def kiteLogin(user_id: str, user_pwd: str, totp_key: str, api_key: str) -> str:
+    """Return the Kite request token after logging in."""
     try:
         driver = _new_driver()
-        driver.get(f'https://kite.trade/connect/login?api_key={api_key}&v=3')
+        driver.get(f"https://kite.trade/connect/login?api_key={api_key}&v=3")
 
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, "userid"))
-        ).send_keys(user_id)
-
-        driver.find_element(By.ID, "password").send_keys(user_pwd)
+        WebDriverWait(driver, 60).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input#userid"))).send_keys(user_id)
+        driver.find_element(By.CSS_SELECTOR, "input#password").send_keys(user_pwd)
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input[icon='shield']"))
-        ).send_keys(pyotp.TOTP(totp_key).now())
+        totp = pyotp.TOTP(totp_key).now()
+        WebDriverWait(driver, 60).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input[icon='shield']"))).send_keys(totp)
+        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
-        time.sleep(1)
-        url = ""
+        logger.info("⌛ Waiting for request_token in redirected URL...")
         for _ in range(90):
             if "request_token=" in driver.current_url:
-                url = driver.current_url
                 break
             time.sleep(1)
 
-        driver.quit()
+        final_url = driver.current_url
+        if "request_token=" not in final_url:
+            raise TimeoutException("request_token not found in URL")
 
-        if "request_token=" not in url:
-            raise Exception("Request token not found in URL")
-
-        return url.split("request_token=")[1].split("&")[0]
+        request_token = final_url.split("request_token=")[1].split("&")[0]
+        logger.info("✅ Login successful. Request token obtained.")
+        return request_token
 
     except Exception as e:
-        logging.error(f"❌ Error during login: {e}")
+        logger.exception("❌ Error during login: %s", e)
+        with open("/tmp/kite_login_fail.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
         raise
+
+    finally:
+        if driver:
+            driver.quit()
+
+if __name__ == "__main__":
+    import dotenv
+    dotenv.load_dotenv()
+    token = kiteLogin(
+        user_id=os.getenv("user_name"),
+        user_pwd=os.getenv("password"),
+        totp_key=os.getenv("totp"),
+        api_key=os.getenv("api_key")
+    )
+    print("Token:", token)

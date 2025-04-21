@@ -65,7 +65,7 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
 
     screener_id = os.getenv("id")
     screener_pass = os.getenv("password_screener")
-    api_key = os.getenv("apiKey")
+    apikey = os.getenv("apiKey")
 
     # Starting chrome in headless mode and saving page source
     options = webdriver.ChromeOptions()
@@ -733,7 +733,7 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     
 
     endpoint = os.getenv("ENDPOINT_URL", "https://ai-tech7953ai345456404029.openai.azure.com/")
-    api_key = os.getenv("AZURE_OPENAI_API_KEY", "EtvF77CaTZ7xeFf36oJvWKWOkWoaxdZOW0gFQSOf0NObKkI1vw1TJQQJ99BDACHYHv6XJ3w3AAAAACOGoqkw")
+    api_keyy = os.getenv("AZURE_OPENAI_API_KEY", "EtvF77CaTZ7xeFf36oJvWKWOkWoaxdZOW0gFQSOf0NObKkI1vw1TJQQJ99BDACHYHv6XJ3w3AAAAACOGoqkw")
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")  # Your deployed gpt-4o model
     api_version = "2025-01-01-preview"
 
@@ -741,13 +741,13 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
     # Initialize Azure OpenAI client
     client = AzureOpenAI(
         azure_endpoint=endpoint,
-        api_key=api_key,
+        api_key=api_keyy,
         api_version=api_version,
         azure_deployment=deployment
     )
 
     # Initialize the OpenAI client
-    client_1 = OpenAI(api_key=api_key)
+    
 
 
     
@@ -821,6 +821,7 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
             return response.choices[0].message.content
         response_concall = get_concall_summary(ticker, pdf_path)
     else:
+        client_1 = OpenAI(api_key=apikey)
         assistant1 = client_1.beta.assistants.create(
         name="Financial Analyst Assistant",
         instructions="""
@@ -858,8 +859,8 @@ def get_analyst_viewpoint(ticker, user_date_str, kite, instrument_df, date):
             ]
         )
         print("No PDF found. Fallback thread created with ID:", thread1.id)
-        run = client.beta.threads.runs.create_and_poll(thread_id=thread1.id, assistant_id=assistant1.id)  # Replace with actual assistant ID
-        messages = list(client.beta.threads.messages.list(thread_id=thread1.id, run_id=run.id))
+        run = client_1.beta.threads.runs.create_and_poll(thread_id=thread1.id, assistant_id=assistant1.id)  # Replace with actual assistant ID
+        messages = list(client_1.beta.threads.messages.list(thread_id=thread1.id, run_id=run.id))
         message_content = messages[0].content[0].text
         response_concall = message_content.value
 
