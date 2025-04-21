@@ -1,4 +1,4 @@
-selenium==4.31.0
+selenium==4.30.0
 pdfplumber
 tiktoken
 openai
@@ -14,4 +14,4 @@ PyPDF2
 python-dotenv
 yfinance
 webdriver-manager
-pyotp==3.1.1
+pyotp==2.9.0
