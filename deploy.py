@@ -1,17 +1,11 @@
 from my_kite_ticker import MyKiteTicker
-from selenium import webdriver
 from py5paisa import FivePaisaClient
 import pyotp
 import pdfplumber
 import tiktoken
 from openai import AzureOpenAI
 import os,time
-import login
 import datetime
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
 import requests
 import pandas as pd
 from reportlab.lib.pagesizes import letter,A4
@@ -23,8 +17,6 @@ from reportlab.lib import colors
 from reportlab.lib.colors import HexColor 
 from reportlab.lib.enums import TA_JUSTIFY
 import requests
-from kiteconnect import KiteConnect, KiteTicker
-from bs4 import BeautifulSoup
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
 import plotly.graph_objects as go

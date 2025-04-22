@@ -1,15 +1,12 @@
-selenium==4.30.0
+streamlit
 pdfplumber
 tiktoken
 openai
 requests
 pandas
 reportlab
-kiteconnect
-beautifulsoup4
 python-dateutil
 plotly
-streamlit
 PyPDF2
 python-dotenv
 pyotp==2.9.0
