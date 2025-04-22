@@ -21,23 +21,7 @@ user_date_str = '2025-04-11'
 market_cap_data = []
 query_date = datetime.datetime.strptime(user_date_str, "%Y-%m-%d")
 
-for peer_ticker in peer_tickers:
-    collection = db[peer_ticker]
-    doc = collection.find_one({
-        "STOCK": peer_ticker,
-        "report": False,
-        "DateTime": query_date
-    })
-    if doc and "company_ratios" in doc and "top_ratios" in doc["company_ratios"]:
-        market_cap = doc["company_ratios"]["top_ratios"].get("Market Cap", None)
-        if market_cap:
-            try:
-                market_cap = float(str(market_cap).replace(',', ''))  # Convert to float, remove commas
-                market_cap_data.append({"Ticker": peer_ticker, "Market Cap": market_cap})
-            except (ValueError, TypeError):
-                continue
-market_cap_data = []
-query_date = datetime.datetime.strptime(user_date_str, "%Y-%m-%d")
+
 for peer_ticker in peer_tickers:
     collection = db[peer_ticker]
     doc = collection.find_one({
