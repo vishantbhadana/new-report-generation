@@ -829,10 +829,10 @@ def get_analyst_viewpoint(ticker, user_date_str, date):
         textColor='#000000',
         spaceAfter=10,
     )
-    endpoint = os.getenv("ENDPOINT_URL", "https://ai-tech7953ai345456404029.openai.azure.com/")
-    api_keyy = os.getenv("AZURE_OPENAI_API_KEY", "EtvF77CaTZ7xeFf36oJvWKWOkWoaxdZOW0gFQSOf0NObKkI1vw1TJQQJ99BDACHYHv6XJ3w3AAAAACOGoqkw")
-    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")  # Your deployed gpt-4o model
-    api_version = "2025-01-01-preview"
+    endpoint = os.getenv("ENDPOINT_URL")
+    api_keyy = os.getenv("AZURE_OPENAI_API_KEY")
+    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")  # Your deployed gpt-4o model
+    api_version = os.getenv("api_version")
 
     client = AzureOpenAI(
         azure_endpoint=endpoint,
@@ -1799,17 +1799,17 @@ st.write(f"Selected Date: {user_date_str}")
 
 
 cred = {
-    "APP_NAME": "5P51366503",
-    "APP_SOURCE": "25390",
-    "USER_ID": "rz0cUakEecS",
-    "PASSWORD": "4KC2LZFnVJu",
-    "USER_KEY": "l8hr8spJOEspIvP37816PDnh1xVtb4pP",
-    "ENCRYPTION_KEY": "SAeJI0n84ckwp0JbSuTCRagmT4hRZoHT"
+    "APP_NAME": os.getenv("APP_NAME"),
+    "APP_SOURCE": os.getenv("APP_SOURCE"),
+    "USER_ID": os.getenv("USER_ID"),
+    "PASSWORD": os.getenv("PASSWORD"),
+    "USER_KEY": os.getenv("USER_KEY"),
+    "ENCRYPTION_KEY": os.getenv("ENCRYPTION_KEY")
     }
 
-SECRET_KEY = "GUYTGNRWGUYDGXZVKBDUWRKZ"
-CLIENT_CODE = "51366503"
-PIN = "200002"
+SECRET_KEY = os.getenv("SECRET_KEY")
+CLIENT_CODE = os.getenv("CLIENT_CODE")
+PIN = os.getenv("PIN")
 
 def generate_totp(secret_key):
     """Generates a dynamic TOTP for authentication."""
