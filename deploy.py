@@ -1363,7 +1363,7 @@ def get_analyst_viewpoint(ticker, user_date_str, date):
         
         st.write("🔄 Downloading latest ScripMaster data...")
 
-        scrip_master_url = "https://openapi.5paisa.com/VendorsAPI/Service1.svc/ScripMaster/segment/All"
+        scrip_master_url = os.getenv("scrip_master_url")
         try:
             response = requests.get(scrip_master_url)
             if response.status_code != 200:
